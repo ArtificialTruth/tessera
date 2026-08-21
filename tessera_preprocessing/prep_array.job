@@ -1,0 +1,80 @@
+#!/bin/bash
+#SBATCH --job-name=tessera-prep
+#SBATCH --output=logs/slurm_prep_%a_%A.out
+#SBATCH --error=logs/slurm_prep_%a_%A.err
+#SBATCH --array=1-20%5              # 20 tiles, 5 concurrent (higher rates hit STAC/API throttling)
+#SBATCH --time=5:00:00
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=64G
+#SBATCH --mail-type=FAIL,END
+#
+# Steps 1-3 of the TESSERA pipeline for one grid tile per array task:
+#   download Sentinel-1/2 -> stack -> retile into d-pixel patches.
+# Run this first; then tessera_infer_QAT/inference_array.job for steps 4-6.
+#
+# Usage:  sbatch --array=1-N prep_array.job
+# where N is the number of lines in $TILE_LIST_FILE.
+
+# ---- configure for your site --------------------------------------------
+CONDA_ENV="${CONDA_ENV:?set CONDA_ENV to your conda environment prefix or name}"
+TESSERA_DATA_ROOT="${TESSERA_DATA_ROOT:?set TESSERA_DATA_ROOT to the directory holding the AOI tile data}"
+TILE_LIST_FILE="${TILE_LIST_FILE:?set TILE_LIST_FILE to a text file listing one ROI .tiff per line}"
+# -------------------------------------------------------------------------
+
+module load Miniconda3/25.5.1-1
+source "${CONDA_BASE:-/opt/itu/easybuild/software/Miniconda3/25.5.1-1}/etc/profile.d/conda.sh"
+conda activate "$CONDA_ENV"
+export PYTHON_ENV=$(which python)
+
+# Pick this task's tile (tr -d '\r' guards against a CRLF tile list)
+MY_TIFF=$(sed -n "${SLURM_ARRAY_TASK_ID}p" "$TILE_LIST_FILE" | tr -d '\r')
+TILE_NAME=$(basename "$MY_TIFF" .tiff)
+
+export BASE_DIR="$TESSERA_DATA_ROOT/$TILE_NAME"
+export INPUT_TIFF="$MY_TIFF"
+
+TILE_LOGS="$BASE_DIR/logs"
+mkdir -p "$BASE_DIR" "$TILE_LOGS"
+
+echo "=========================================================="
+echo "Task ${SLURM_ARRAY_TASK_ID} starting on node $(hostname)"
+echo "Processing tile: $INPUT_TIFF"
+echo "Detailed step logs saving to: $TILE_LOGS"
+echo "=========================================================="
+
+# ---------------------------------------------------------
+# STEP 1: Download Sentinel-1/2 for the ROI
+# ---------------------------------------------------------
+echo "[$(date '+%H:%M:%S')] Starting Step 1: Download..."
+if bash ./s1_s2_downloader.sh > "$TILE_LOGS/1_download.log" 2>&1; then
+    echo "Step 1 completed."
+else
+    echo "Step 1 FAILED -- see $TILE_LOGS/1_download.log"
+    exit 1
+fi
+
+# ---------------------------------------------------------
+# STEP 2: Stack into the d-pixel time series
+# ---------------------------------------------------------
+echo "[$(date '+%H:%M:%S')] Starting Step 2: Stack..."
+if bash ./s1_s2_stacker.sh > "$TILE_LOGS/2_stack.log" 2>&1; then
+    echo "Step 2 completed."
+else
+    echo "Step 2 FAILED -- see $TILE_LOGS/2_stack.log"
+    exit 1
+fi
+
+# ---------------------------------------------------------
+# STEP 3: Retile into 250 px patches for inference
+# ---------------------------------------------------------
+echo "[$(date '+%H:%M:%S')] Starting Step 3: Patch..."
+if bash ./run_patcher.sh > "$TILE_LOGS/3_patch.log" 2>&1; then
+    echo "Step 3 completed."
+else
+    echo "Step 3 FAILED -- see $TILE_LOGS/3_patch.log"
+    exit 1
+fi
+
+echo "=========================================================="
+echo "Task ${SLURM_ARRAY_TASK_ID} finished all steps."
+echo "=========================================================="

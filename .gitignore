@@ -54,3 +54,7 @@ tessera_infer/profiler/chat_history.txt
 chat_history.txt
 first_three_band.png
 pca_three_band.png
+# SLURM job output
+*.out
+*.err
+logs/

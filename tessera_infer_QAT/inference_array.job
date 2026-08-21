@@ -1,0 +1,101 @@
+#!/bin/bash
+#SBATCH --job-name=tessera-infer
+#SBATCH --output=logs/slurm_infer_%a_%A.out
+#SBATCH --error=logs/slurm_infer_%a_%A.err
+#SBATCH --array=1-5
+#SBATCH --time=04:00:00
+#SBATCH --mem=64G
+#SBATCH --gres=gpu
+#SBATCH --partition=acltr
+#SBATCH --mail-type=FAIL,END
+#
+# Steps 4-6 of the TESSERA pipeline for one grid tile per array task:
+#   QAT inference -> stitch patches -> convert to GeoTIFF.
+# Run after tessera_preprocessing/prep_array.job has completed for the
+# same tiles. This is the path that produced the embeddings used in the
+# Greenland coastline study; see GREENLAND.md.
+#
+# Usage:
+#   sbatch --array=1-N inference_array.job            # resume: keeps existing patches
+#   sbatch --array=1-N inference_array.job --clean    # discard prior representations first
+
+# ---- configure for your site --------------------------------------------
+CONDA_ENV="${CONDA_ENV:?set CONDA_ENV to your conda environment prefix or name}"
+TESSERA_DATA_ROOT="${TESSERA_DATA_ROOT:?set TESSERA_DATA_ROOT to the directory holding the AOI tile data}"
+TILE_LIST_FILE="${TILE_LIST_FILE:?set TILE_LIST_FILE to a text file listing one ROI .tiff per line}"
+TESSERA_REPO="${TESSERA_REPO:?set TESSERA_REPO to the root of this repository}"
+# -------------------------------------------------------------------------
+
+export TMPDIR="${TMPDIR:-$HOME/tmp}"
+module load CUDA/12.6.0
+module load Miniconda3/25.5.1-1
+source "${CONDA_BASE:-/opt/itu/easybuild/software/Miniconda3/25.5.1-1}/etc/profile.d/conda.sh"
+conda activate "$CONDA_ENV"
+
+# Pick this task's tile (tr -d '\r' guards against a CRLF tile list)
+MY_TIFF=$(sed -n "${SLURM_ARRAY_TASK_ID}p" "$TILE_LIST_FILE" | tr -d '\r')
+TILE_NAME=$(basename "$MY_TIFF" .tiff)
+
+export BASE_DIR="$TESSERA_DATA_ROOT/$TILE_NAME"
+export INPUT_TIFF="$MY_TIFF"
+TILE_LOGS="$BASE_DIR/logs"
+mkdir -p "$TILE_LOGS"
+
+echo "=========================================================="
+echo "Task ${SLURM_ARRAY_TASK_ID} starting on node $(hostname)"
+echo "Processing grid folder: $TILE_NAME"
+echo "Target TIFF: $INPUT_TIFF"
+echo "=========================================================="
+
+# ---------------------------------------------------------
+# Optional: clear previous representations for a clean rerun
+# ---------------------------------------------------------
+if [[ " $@ " =~ " --clean " ]]; then
+    REP_DIR="$BASE_DIR/representation_retiled_qat"
+    echo "[CLEAN MODE] Removing $REP_DIR"
+    rm -rf "$REP_DIR"
+    mkdir -p "$REP_DIR"
+fi
+
+# ---------------------------------------------------------
+# STEP 4: QAT inference over the retiled patches
+# ---------------------------------------------------------
+echo "[$(date '+%H:%M:%S')] Starting Inference..."
+if bash ./infer_all_tiles.sh > "$TILE_LOGS/4_inference.log" 2>&1; then
+    echo "Inference completed."
+else
+    echo "Inference FAILED -- see $TILE_LOGS/4_inference.log"
+    exit 1
+fi
+
+# ---------------------------------------------------------
+# STEP 5: Stitch the per-patch representations into one array
+# ---------------------------------------------------------
+echo "[$(date '+%H:%M:%S')] Starting Stitching..."
+if python "$TESSERA_REPO/tessera_infer/stitch_tiled_representation.py" \
+    --d_pixel_retiled_path "$BASE_DIR/retiled_d_pixel" \
+    --representation_retiled_path "$BASE_DIR/representation_retiled_qat" \
+    --downstream_tiff "$INPUT_TIFF" \
+    --out_dir "$BASE_DIR" > "$TILE_LOGS/5_stitch.log" 2>&1; then
+    echo "Stitching completed."
+else
+    echo "Stitching FAILED -- see $TILE_LOGS/5_stitch.log"
+    exit 1
+fi
+
+# ---------------------------------------------------------
+# STEP 6: Write the stitched array out as a GeoTIFF
+# ---------------------------------------------------------
+echo "[$(date '+%H:%M:%S')] Converting NPY to TIFF..."
+if python "$TESSERA_REPO/tessera_infer/convert_npy2tiff.py" \
+    --base_dir "$BASE_DIR" \
+    --input_tiff "$INPUT_TIFF" > "$TILE_LOGS/6_convert.log" 2>&1; then
+    echo "Conversion completed."
+else
+    echo "Conversion FAILED -- see $TILE_LOGS/6_convert.log"
+    exit 1
+fi
+
+echo "=========================================================="
+echo "Task ${SLURM_ARRAY_TASK_ID} finished all steps."
+echo "=========================================================="
