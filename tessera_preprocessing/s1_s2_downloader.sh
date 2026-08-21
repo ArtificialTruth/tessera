@@ -12,19 +12,19 @@ set -u
 #######################################
 
 # === Basic Configuration ===
- : "${INPUT_TIFF:=/absolute/path/to/your/data_dir/roi.tiff}"
- : "${OUT_DIR:=/absolute/path/to/your/data_dir}"
+ : "${INPUT_TIFF:?INPUT_TIFF must be set: the ROI GeoTIFF for this tile}"
+ : "${OUT_DIR:=${BASE_DIR:?BASE_DIR or OUT_DIR must be set}}"
 
- : "${TEMP_DIR:=/absolute/path/to/your/temp_dir}"     # Temporary file directory
+ : "${TEMP_DIR:=${TMPDIR:-/tmp}}"     # Temporary file directory
 export TEMP_DIR
 
 mkdir -p "$OUT_DIR"
 
 # Python environment path
- : "${PYTHON_ENV:=/absolute/path/to/your/python_env/bin/python}"
+ : "${PYTHON_ENV:=python}"
 
 # === Sentinel-1 & Sentinel-2 Processing Configuration ===
- : "${YEAR:=2022}" # Range [2017-2025]
+ : "${YEAR:=2017}" # Range [2017-2025]. 2017 = study year for the Greenland AOIs
  : "${RESOLUTION:=10.0}"  # Resolution of the input TIFF, also the output resolution (meters)
 
 # === Data Source Configuration ===
@@ -48,7 +48,7 @@ S1_CHUNKSIZE=1024                  # S1 stackstac chunk size
 S1_ORBIT_STATE="both"              # Orbit state: ascending/descending/both
 S1_MIN_COVERAGE=0.01               # Minimum valid pixel coverage for S1 (%) set this to 0.01 to mitigate the tiling artefact!
 S1_RESOLUTION=$RESOLUTION          # S1 output resolution (meters)
-S1_OVERWRITE=true                  # Overwrite existing S1 files
+S1_OVERWRITE=false                 # Overwrite existing S1 files
 
 # === Sentinel-2 Configuration ===
 S2_ENABLED=true                    # Enable S2 processing
@@ -59,7 +59,7 @@ S2_CHUNKSIZE=1024                  # S2 stackstac chunk size
 S2_MAX_CLOUD=100                   # Maximum cloud coverage for S2 (%) set this to 100 to mitigate the tiling artefact!
 S2_RESOLUTION=$RESOLUTION          # S2 output resolution (meters)
 S2_MIN_COVERAGE=0.01               # Minimum valid pixel coverage for S2 (%) set this to 0.01 to mitigate the tiling artefact!
-S2_OVERWRITE=true                  # Overwrite existing S2 files
+S2_OVERWRITE=false                 # Overwrite existing S2 files
 
 # === System Configuration ===
 DEBUG=false                        # Enable debug mode

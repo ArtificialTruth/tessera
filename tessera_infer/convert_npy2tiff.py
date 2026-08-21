@@ -1,4 +1,5 @@
 import os
+import argparse
 import numpy as np
 import rasterio
 from rasterio.transform import Affine
@@ -57,7 +58,11 @@ def convert_npy_to_tiff(npy_path, ref_tiff_path, out_dir, downsample_rate=1):
         'width': W,
         'count': C,
         'dtype': data.dtype,
-        'transform': transform  # Update affine transform information
+        'transform': transform,  # Update affine transform information
+        'tiled': True,           # tiled layout, not stripped
+        'blockxsize': 256,       # 256x256 blocks: the Earth Engine ingest default
+        'blockysize': 256,
+        'compress': 'lzw'        # lossless; 128-band embeddings are large
     })
 
     # Construct the output filename, same name as the npy file but with .tif extension
@@ -75,8 +80,16 @@ def convert_npy_to_tiff(npy_path, ref_tiff_path, out_dir, downsample_rate=1):
     print(f"Resolution: Original 10m, after downsampling {10 * downsample_rate}m")
 
 if __name__ == "__main__":
-    npy_path = "/scratch/zf281/tessera/data/cambridge/output/2024/stitched_representation.npy"  # Change to the actual npy file path
-    ref_tiff_path = "/scratch/zf281/tessera/data/cambridge/geoinfo/CB.tiff"  # Change to the actual reference tiff file path
-    out_dir = "/scratch/zf281/tessera/data/cambridge/output/2024"  # Change to the actual output directory
-    downsample_rate = 1  # Default is no downsampling, modify as needed
-    convert_npy_to_tiff(npy_path, ref_tiff_path, out_dir, downsample_rate)
+    parser = argparse.ArgumentParser(description="Convert stitched NPY to TIFF")
+    parser.add_argument("--base_dir", type=str, required=True, help="Base directory of the current tile")
+    parser.add_argument("--input_tiff", type=str, required=True, help="Original reference TIFF file")
+    parser.add_argument("--downsample_rate", type=int, default=1, help="Downsample rate (default: 1)")
+    
+    args = parser.parse_args()
+
+    # Construct the paths dynamically based on the SLURM inputs
+    npy_path = os.path.join(args.base_dir, "stitched_representation.npy")
+    ref_tiff_path = args.input_tiff
+    out_dir = args.base_dir
+
+    convert_npy_to_tiff(npy_path, ref_tiff_path, out_dir, args.downsample_rate)

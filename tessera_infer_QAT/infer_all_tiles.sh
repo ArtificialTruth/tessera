@@ -8,18 +8,19 @@
 
 ############### This needs to be modified to your environment ###############
 # Main directory where preprocessed tiles and outputs are located
-BASE_DATA_DIR="/absolute_path_to_data_dir"
+: "${BASE_DIR:?BASE_DIR must be set: the per-tile output directory}"
+BASE_DATA_DIR="$BASE_DIR"
 
 # Python environment with required dependencies
-export PYTHON_ENV="/absolute_path_to_python_env/bin/python"
+export PYTHON_ENV="${PYTHON_ENV:-$(command -v python)}"
 
 # CPU:GPU split ratio (Format: CPU:GPU)
 # Examples: "1:1" (balanced), "1:0" (CPU only), "0:1" (GPU only)
-CPU_GPU_SPLIT="1:0"
+CPU_GPU_SPLIT="0:1"
 
 # Max concurrent tile processes for CPU/GPU
 MAX_CONCURRENT_PROCESSES_CPU=20
-MAX_CONCURRENT_PROCESSES_GPU=1
+MAX_CONCURRENT_PROCESSES_GPU=10
 
 # CPU cores to use
 TOTAL_CPU_CORES=$(nproc)
@@ -45,7 +46,7 @@ TILES_DIR="${BASE_DATA_DIR}/retiled_d_pixel"
 OUTPUT_DIR="${BASE_DATA_DIR}/representation_retiled_qat"
 CONFIG_FILE="configs/multi_tile_infer_config.py"
 PYTHON_SCRIPT="src/multi_tile_infer.py"
-CHECKPOINT_PATH="checkpoints/best_model_fsdp_20250608_220648_QAT.pt"
+CHECKPOINT_PATH="${CHECKPOINT_PATH:-checkpoints/best_model_fsdp_20250608_220648_QAT.pt}"
 
 # Parse command line arguments
 while [[ $# -gt 0 ]]; do

@@ -12,11 +12,12 @@
 # Set default values
 # This is the main directory where all processed and raw data will be stored
 # BASE_DATA_DIR="/absolute/path/to/your/data_dir"
-BASE_DATA_DIR="/scratch/zf281/tessera/data/test_artefact"
+: "${BASE_DIR:?BASE_DIR must be set: the per-tile output directory}"
+BASE_DATA_DIR="$BASE_DIR"
 
 # Python environment that has the required packages installed
 # export PYTHON_ENV="/absolute/path/to/your/python_env/bin/python"
-export PYTHON_ENV="/maps/zf281/miniconda3/envs/detectree-env/bin/python"
+export PYTHON_ENV="${PYTHON_ENV:-$(command -v python)}"
 
 # CPU:GPU split ratio
 # The script supports simultaneous inference using both CPU and GPU. This ratio specifies the proportion of retiled_patches each device will handle. 
@@ -55,7 +56,7 @@ CONFIG_FILE="configs/multi_tile_infer_config.py"
 PYTHON_SCRIPT="src/multi_tile_infer.py"
 
 # Path to the checkpoint file for the model
-CHECKPOINT_PATH="checkpoints/best_model_fsdp_20250427_084307.pt"
+CHECKPOINT_PATH="${CHECKPOINT_PATH:-checkpoints/best_model_fsdp_20250427_084307.pt}"
 
 # Path to the ONNX model for CPU inference (optional)
 ONNX_MODEL_PATH="checkpoints/model_optimized.onnx"
