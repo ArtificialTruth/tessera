@@ -153,33 +153,37 @@ def extract_patch_from_block(block_data, block_x_start, block_y_start,
     patch_data['sar_ascending_doy'] = block_data['sar_ascending_doy'].copy()
     patch_data['sar_descending_doy'] = block_data['sar_descending_doy'].copy()
     
-    # Extract spatial data - only allocate the exact size needed
+    # Initialize all spatial arrays with zeros
+    patch_data['bands'] = np.zeros((block_data['bands'].shape[0], patch_size, patch_size, 
+                                  block_data['bands'].shape[3]), dtype=block_data['bands'].dtype)
+    patch_data['masks'] = np.zeros((block_data['masks'].shape[0], patch_size, patch_size), 
+                                 dtype=block_data['masks'].dtype)
+    patch_data['sar_ascending'] = np.zeros((block_data['sar_ascending'].shape[0], patch_size, patch_size,
+                                          block_data['sar_ascending'].shape[3]), dtype=block_data['sar_ascending'].dtype)
+    patch_data['sar_descending'] = np.zeros((block_data['sar_descending'].shape[0], patch_size, patch_size,
+                                           block_data['sar_descending'].shape[3]), dtype=block_data['sar_descending'].dtype)
+
     if actual_h > 0 and actual_w > 0:
-        # Extract from block data directly to the right size
-        patch_data['bands'] = np.zeros((block_data['bands'].shape[0], patch_size, patch_size, 
-                                      block_data['bands'].shape[3]), dtype=block_data['bands'].dtype)
-        patch_data['masks'] = np.zeros((block_data['masks'].shape[0], patch_size, patch_size), 
-                                     dtype=block_data['masks'].dtype)
-        patch_data['sar_ascending'] = np.zeros((block_data['sar_ascending'].shape[0], patch_size, patch_size,
-                                              block_data['sar_ascending'].shape[3]), dtype=block_data['sar_ascending'].dtype)
-        patch_data['sar_descending'] = np.zeros((block_data['sar_descending'].shape[0], patch_size, patch_size,
-                                               block_data['sar_descending'].shape[3]), dtype=block_data['sar_descending'].dtype)
-        
-        # Copy actual data
-        patch_data['bands'][:, :actual_h, :actual_w, :] = block_data['bands'][:, local_y_min:local_y_max, local_x_min:local_x_max, :]
-        patch_data['masks'][:, :actual_h, :actual_w] = block_data['masks'][:, local_y_min:local_y_max, local_x_min:local_x_max]
-        patch_data['sar_ascending'][:, :actual_h, :actual_w, :] = block_data['sar_ascending'][:, local_y_min:local_y_max, local_x_min:local_x_max, :]
-        patch_data['sar_descending'][:, :actual_h, :actual_w, :] = block_data['sar_descending'][:, local_y_min:local_y_max, local_x_min:local_x_max, :]
-    else:
-        # Create empty arrays if no valid area
-        patch_data['bands'] = np.zeros((block_data['bands'].shape[0], patch_size, patch_size, 
-                                      block_data['bands'].shape[3]), dtype=block_data['bands'].dtype)
-        patch_data['masks'] = np.zeros((block_data['masks'].shape[0], patch_size, patch_size), 
-                                     dtype=block_data['masks'].dtype)
-        patch_data['sar_ascending'] = np.zeros((block_data['sar_ascending'].shape[0], patch_size, patch_size,
-                                              block_data['sar_ascending'].shape[3]), dtype=block_data['sar_ascending'].dtype)
-        patch_data['sar_descending'] = np.zeros((block_data['sar_descending'].shape[0], patch_size, patch_size,
-                                               block_data['sar_descending'].shape[3]), dtype=block_data['sar_descending'].dtype)
+        # Copy actual data securely matching the available dimensions for each source array
+        for key in ['bands', 'sar_ascending', 'sar_descending']:
+            src = block_data[key]
+            y_max = min(local_y_min + patch_size, src.shape[1])
+            x_max = min(local_x_min + patch_size, src.shape[2])
+            y_min = min(local_y_min, y_max)
+            x_min = min(local_x_min, x_max)
+            h, w = y_max - y_min, x_max - x_min
+            if h > 0 and w > 0:
+                patch_data[key][:, :h, :w, :] = src[:, y_min:y_max, x_min:x_max, :]
+                
+        # Handle masks separately (3D array: T, H, W)
+        src = block_data['masks']
+        y_max = min(local_y_min + patch_size, src.shape[1])
+        x_max = min(local_x_min + patch_size, src.shape[2])
+        y_min = min(local_y_min, y_max)
+        x_min = min(local_x_min, x_max)
+        h, w = y_max - y_min, x_max - x_min
+        if h > 0 and w > 0:
+            patch_data['masks'][:, :h, :w] = src[:, y_min:y_max, x_min:x_max]
     
     return patch_data
 
