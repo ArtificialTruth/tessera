@@ -155,8 +155,8 @@ trap cleanup SIGINT SIGTERM
 
 log_header "SETUP DIRECTORIES"
 mkdir -p "$OUTPUT_DIR"
-mkdir -p "src/tile_lists"
-mkdir -p "logs"
+mkdir -p "${OUTPUT_DIR}/tile_lists"
+mkdir -p "${OUTPUT_DIR}/logs"
 log_success "Created necessary directories"
 
 log_header "SCANNING TILES"
@@ -236,7 +236,7 @@ if [[ $GPU_TILES_COUNT -gt 0 ]]; then
                 if [[ $i -lt $REMAINDER ]]; then END=$((END + 1)); fi
                 if [[ $i -ge $REMAINDER ]]; then START=$((START + REMAINDER)); else START=$((START + i)); fi
 
-                TILE_LIST="src/tile_lists/tiles_gpu_${i}.json"
+                TILE_LIST="${OUTPUT_DIR}/tile_lists/tiles_gpu_${i}.json"
                 echo -n "[" > "$TILE_LIST"
                 for ((j=START; j<END && j<GPU_TILES_COUNT; j++)); do
                     [[ $j -gt $START ]] && echo -n "," >> "$TILE_LIST"
@@ -271,8 +271,8 @@ launch_gpu_processes() {
     if [[ $GPU_TILES_COUNT -le 0 ]]; then return; fi
     log_header "GPU PROCESSING"
     for ((i=0; i<NUM_GPU_PROCESSES; i++)); do
-        TILE_LIST="src/tile_lists/tiles_gpu_${i}.json"
-        LOG_FILE="logs/infer_qat_gpu_${i}.log"
+        TILE_LIST="${OUTPUT_DIR}/tile_lists/tiles_gpu_${i}.json"
+        LOG_FILE="${OUTPUT_DIR}/logs/infer_qat_gpu_${i}.log"
         VERBOSE_GPU_FLAG=""
         [[ "$VERBOSE_GPU" == "true" ]] && VERBOSE_GPU_FLAG="--verbose_gpu"
         CMD="$PYTHON_ENV $PYTHON_SCRIPT --config $CONFIG_FILE --mode gpu --gpu_id $i --tile_list $TILE_LIST --process_id $i --checkpoint_path $CHECKPOINT_PATH --output_dir $OUTPUT_DIR --batch_size $GPU_BATCH_SIZE --num_workers $GPU_NUM_WORKERS --log_interval $LOG_INTERVAL $GPU_BF16_FLAG $VERBOSE_GPU_FLAG --simplified_logging"
@@ -287,7 +287,7 @@ launch_gpu_processes() {
 start_cpu_process() {
     local tile_path="$1"
     local process_id="$2"
-    local log_file="logs/infer_qat_cpu_${process_id}.log"
+    local log_file="${OUTPUT_DIR}/logs/infer_qat_cpu_${process_id}.log"
     > "$log_file"
     $PYTHON_ENV "$PYTHON_SCRIPT" \
         --config "$CONFIG_FILE" \
@@ -394,6 +394,6 @@ SCRIPT_END=$(date +%s)
 TOTAL_DURATION=$(calculate_time $SCRIPT_START $SCRIPT_END)
 log_header "COMPLETED IN $TOTAL_DURATION"
 log_info "Detailed logs:"
-log_info "  - CPU logs: logs/infer_qat_cpu_*.log"
-log_info "  - GPU logs: logs/infer_qat_gpu_*.log"
+log_info "  - CPU logs: ${OUTPUT_DIR}/logs/infer_qat_cpu_*.log"
+log_info "  - GPU logs: ${OUTPUT_DIR}/logs/infer_qat_gpu_*.log"
 

@@ -302,8 +302,8 @@ log_header "SETUP DIRECTORIES"
 
 # Create output directory if it doesn't exist
 mkdir -p "$OUTPUT_DIR"
-mkdir -p "src/tile_lists"
-mkdir -p "logs"  # Make sure logs directory exists
+mkdir -p "${OUTPUT_DIR}/tile_lists"
+mkdir -p "${OUTPUT_DIR}/logs"  # Make sure logs directory exists
 log_success "Created necessary directories"
 
 log_header "SCANNING TILES"
@@ -472,7 +472,7 @@ if [ $GPU_TILES_COUNT -gt 0 ]; then
                     fi
                     
                     # Create tile list for this GPU
-                    TILE_LIST="src/tile_lists/tiles_gpu_${i}.json"
+                    TILE_LIST="${OUTPUT_DIR}/tile_lists/tiles_gpu_${i}.json"
                     
                     # Build JSON array of tiles
                     echo -n "[" > "$TILE_LIST"
@@ -621,8 +621,8 @@ launch_gpu_processes() {
         
         # Launch python processes for each GPU
         for ((i=0; i<NUM_GPU_PROCESSES; i++)); do
-            TILE_LIST="src/tile_lists/tiles_gpu_${i}.json"
-            LOG_FILE="logs/infer_gpu_${i}.log"
+            TILE_LIST="${OUTPUT_DIR}/tile_lists/tiles_gpu_${i}.json"
+            LOG_FILE="${OUTPUT_DIR}/logs/infer_gpu_${i}.log"
             
             # Verify tile list exists and has content
             if [ ! -f "$TILE_LIST" ]; then
@@ -809,7 +809,7 @@ monitor_gpu_processes() {
                 # Show tail of all GPU process logs
                 for ((i=0; i<NUM_GPU_PROCESSES; i++)); do
                     if ps -p ${GPU_PIDS[$i]} > /dev/null; then
-                        LOG_FILE="logs/infer_gpu_${i}.log"
+                        LOG_FILE="${OUTPUT_DIR}/logs/infer_gpu_${i}.log"
                         
                         if [ -f "$LOG_FILE" ] && [ -s "$LOG_FILE" ]; then
                             echo "Latest progress from GPU $i:" >&2
@@ -946,6 +946,6 @@ log_header "COMPLETED IN $TOTAL_DURATION"
 
 # Log where to find detailed process logs
 log_info "Detailed logs can be found in:"
-log_info "  - CPU logs: logs/infer_cpu_*.log"
-log_info "  - GPU logs: logs/infer_gpu_*.log"
+log_info "  - CPU logs: ${OUTPUT_DIR}/logs/infer_cpu_*.log"
+log_info "  - GPU logs: ${OUTPUT_DIR}/logs/infer_gpu_*.log"
 log_info "  - GPU monitoring: logs/gpu_monitor_*.log"
