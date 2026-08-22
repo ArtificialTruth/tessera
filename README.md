@@ -1,3 +1,16 @@
+> **This is a fork.** It records the TESSERA code as run to generate the
+> Sentinel-1/2 embeddings for *Applying Deep Learning and Advances in Coastal
+> Line Segmentation to Geospatial Data in Greenland* (Akgül & So).
+> See **[GREENLAND.md](GREENLAND.md)** for what changed, which checkpoint was
+> used, and how to reproduce the embeddings.
+>
+> Branched from upstream [`494a550`](https://github.com/ucam-eo/tessera/commit/494a550c50c4cf4b40c4574e54cc2eb704901989)
+> (`beta_version_1.0`). The model and its weights are unmodified. For TESSERA
+> itself, use [ucam-eo/tessera](https://github.com/ucam-eo/tessera) — not this
+> fork. Upstream's README follows unchanged.
+
+---
+
 # Temporal Embeddings of Surface Spectra for Earth Representation and Analysis (TESSERA)
 <div align="center">
     <a href="#readme-top">
