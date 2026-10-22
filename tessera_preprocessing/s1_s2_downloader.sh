@@ -65,6 +65,8 @@ S2_OVERWRITE=false                 # Overwrite existing S2 files
 # === System Configuration ===
 DEBUG=false                        # Enable debug mode
 LOG_INTERVAL=10                    # Progress update interval (seconds)
+HEARTBEAT_INTERVAL=60              # Write a progress line this often. The status counter uses \r and leaves no history.
+STALL_WARN_AFTER=600               # Warn when a live partition's log has not grown for this many seconds.
 PARTITION_TIMEOUT=2700             # Kill a partition that is still alive after 45 minutes. A hung band read never exits on its own.
 
 #######################################
@@ -242,6 +244,42 @@ count_live_pids() {
     echo "$n"
 }
 
+# One newline per live partition so tail -f shows movement. A silent log is the
+# hang seen on the full-AOI band read: the process stays up, the file does not grow.
+report_running_partitions() {
+    local prefix=$1
+    local -n _pids=$2
+    local -n _starts=$3
+    local -n _ids=$4
+    local now=0 running=0 i pid age plog mtime silent last
+    if ((${#_pids[@]} == 0)); then
+        return
+    fi
+    now=$(date +%s)
+    echo ""
+    for i in "${!_pids[@]}"; do
+        pid=${_pids[i]}
+        [[ -z "$pid" ]] && continue
+        kill -0 "$pid" 2>/dev/null || continue
+        running=$((running + 1))
+        age=$((now - ${_starts[i]}))
+        plog="${LOG_DIR}/${_ids[i]}.log"
+        if [[ -f "$plog" ]]; then
+            mtime=$(stat -c %Y "$plog")
+            silent=$((now - mtime))
+            if (( silent > STALL_WARN_AFTER )); then
+                last=$(tail -n 1 "$plog" 2>/dev/null || true)
+                log WARNING "$prefix ${_ids[i]} alive ${age}s, log silent ${silent}s. last: ${last}"
+            else
+                log INFO "$prefix ${_ids[i]} alive ${age}s, log updated ${silent}s ago"
+            fi
+        else
+            log WARNING "$prefix ${_ids[i]} alive ${age}s, no log file yet"
+        fi
+    done
+    log INFO "$prefix heartbeat: ${running} partition(s) running"
+}
+
 # A partition blocked in stackstac stays alive forever. Kill it, and its Dask
 # workers, once PARTITION_TIMEOUT seconds have passed since it was launched.
 reap_overdue_pids() {
@@ -282,6 +320,7 @@ monitor_processes() {
     local prefix=$6
     
     declare -A finished_pids
+    local last_heartbeat=0
     
     while true; do
         local all_done=true
@@ -331,6 +370,11 @@ monitor_processes() {
         
         if ! $all_done; then
             echo -ne "\r${CYAN}[$(date '+%H:%M:%S')]${NC} $prefix: ${running_count}/${#pids[@]} partitions running...${NC}"
+            local now=$(date +%s)
+            if (( now - last_heartbeat >= HEARTBEAT_INTERVAL )); then
+                report_running_partitions "$prefix" pids start_times partition_ids
+                last_heartbeat=$now
+            fi
         fi
         
         if $all_done; then
@@ -452,9 +496,15 @@ process_sentinel2() {
     local s2_completed=()
     local s2_failed=()
     
+    local last_heartbeat=0
     for i in "${!s2_partitions[@]}"; do
         while (( $(count_live_pids s2_pids) >= S2_MAX_PARALLEL )); do
             reap_overdue_pids s2_pids s2_start_times s2_partition_ids
+            local now=$(date +%s)
+            if (( now - last_heartbeat >= HEARTBEAT_INTERVAL )); then
+                report_running_partitions "S2" s2_pids s2_start_times s2_partition_ids
+                last_heartbeat=$now
+            fi
             sleep "$LOG_INTERVAL"
         done
 
