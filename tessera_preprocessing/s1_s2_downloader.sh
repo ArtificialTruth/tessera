@@ -52,9 +52,10 @@ S1_OVERWRITE=false                 # Overwrite existing S1 files
 
 # === Sentinel-2 Configuration ===
 S2_ENABLED=true                    # Enable S2 processing
-S2_PARTITIONS=24                   # Number of S2 parallel partitions
+S2_PARTITIONS=24                   # Number of S2 date windows. Keep these short: a ~15-day window finishes in about 20 minutes.
+S2_MAX_PARALLEL=2                  # How many of those windows may download at once. 24 at once deadlocks the full-AOI band read.
 S2_TOTAL_WORKERS=24                # Total number of S2 Dask workers
-S2_WORKER_MEMORY=4                 # Memory per S2 worker (GB)
+S2_WORKER_MEMORY=8                 # Memory per S2 worker (GB)
 S2_CHUNKSIZE=1024                  # S2 stackstac chunk size
 S2_MAX_CLOUD=100                   # Maximum cloud coverage for S2 (%) set this to 100 to mitigate the tiling artefact!
 S2_RESOLUTION=$RESOLUTION          # S2 output resolution (meters)
@@ -64,6 +65,7 @@ S2_OVERWRITE=false                 # Overwrite existing S2 files
 # === System Configuration ===
 DEBUG=false                        # Enable debug mode
 LOG_INTERVAL=10                    # Progress update interval (seconds)
+PARTITION_TIMEOUT=2700             # Kill a partition that is still alive after 45 minutes. A hung band read never exits on its own.
 
 #######################################
 # Internal Variables (Be Careful to Modify)
@@ -224,6 +226,50 @@ generate_partition_id() {
     fi
 }
 
+# Number of still-running pids in an array. Empty arrays are valid under set -u.
+count_live_pids() {
+    local -n _pids=$1
+    local n=0 pid
+    if ((${#_pids[@]} == 0)); then
+        echo 0
+        return
+    fi
+    for pid in "${_pids[@]}"; do
+        if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+            n=$((n + 1))
+        fi
+    done
+    echo "$n"
+}
+
+# A partition blocked in stackstac stays alive forever. Kill it, and its Dask
+# workers, once PARTITION_TIMEOUT seconds have passed since it was launched.
+reap_overdue_pids() {
+    local -n _pids=$1
+    local -n _starts=$2
+    local -n _ids=$3
+    local now pid age i
+    if ((${#_pids[@]} == 0)); then
+        return
+    fi
+    now=$(date +%s)
+    for i in "${!_pids[@]}"; do
+        pid=${_pids[i]}
+        [[ -z "$pid" ]] && continue
+        if kill -0 "$pid" 2>/dev/null; then
+            age=$((now - ${_starts[i]}))
+            if (( age > PARTITION_TIMEOUT )); then
+                log ERROR "${_ids[i]} still running after ${age}s, killing"
+                kill -TERM "$pid" 2>/dev/null || true
+                pkill -TERM -P "$pid" 2>/dev/null || true
+                sleep 2
+                kill -KILL "$pid" 2>/dev/null || true
+                pkill -KILL -P "$pid" 2>/dev/null || true
+            fi
+        fi
+    done
+}
+
 #######################################
 # Monitoring Function
 #######################################
@@ -247,6 +293,19 @@ monitor_processes() {
                 continue
             fi
             
+            if kill -0 $pid 2>/dev/null; then
+                local now=$(date +%s)
+                local age=$((now - ${start_times[i]}))
+                if (( age > PARTITION_TIMEOUT )); then
+                    log ERROR "$prefix partition ${partition_ids[i]} still running after ${age}s, killing"
+                    kill -TERM "$pid" 2>/dev/null || true
+                    pkill -TERM -P "$pid" 2>/dev/null || true
+                    sleep 2
+                    kill -KILL "$pid" 2>/dev/null || true
+                    pkill -KILL -P "$pid" 2>/dev/null || true
+                fi
+            fi
+
             if kill -0 $pid 2>/dev/null; then
                 all_done=false
                 running_count=$((running_count + 1))
@@ -378,6 +437,8 @@ process_sentinel2() {
     
     log INFO "S2 Configuration:"
     log INFO "  - Partitions: $S2_PARTITIONS"
+    log INFO "  - Max parallel: $S2_MAX_PARALLEL"
+    log INFO "  - Partition timeout: ${PARTITION_TIMEOUT}s"
     log INFO "  - Total Workers: $S2_TOTAL_WORKERS"
     log INFO "  - Worker Memory: ${S2_WORKER_MEMORY}GB"
     log INFO "  - Max Cloud: ${S2_MAX_CLOUD}%"
@@ -392,6 +453,11 @@ process_sentinel2() {
     local s2_failed=()
     
     for i in "${!s2_partitions[@]}"; do
+        while (( $(count_live_pids s2_pids) >= S2_MAX_PARALLEL )); do
+            reap_overdue_pids s2_pids s2_start_times s2_partition_ids
+            sleep "$LOG_INTERVAL"
+        done
+
         p_range=${s2_partitions[i]}
         p_start=${p_range%,*}
         p_end=${p_range#*,}
