@@ -68,9 +68,9 @@ OPTIONS:
 ./s2_stack \
   --input "${BASE_DIR}/data_raw" \
   --output $OUT_DIR \
-  --batch-size 16 \
-  --cache-level 1 \
-  --num-threads 16 \
+  --batch-size 1 \
+  --cache-level 0 \
+  --num-threads 4 \
   --sample-rate $DOWNSAMPLE_RATE
 
 echo "Processing complete. Processed data is available in: $OUT_DIR"
