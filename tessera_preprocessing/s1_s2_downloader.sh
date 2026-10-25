@@ -67,7 +67,7 @@ DEBUG=false                        # Enable debug mode
 LOG_INTERVAL=10                    # Progress update interval (seconds)
 HEARTBEAT_INTERVAL=60              # Write a progress line this often. The status counter uses \r and leaves no history.
 STALL_WARN_AFTER=600               # Warn when a live partition's log has not grown for this many seconds.
-PARTITION_TIMEOUT=7200             # Kill a partition that is still alive after 2 hours. A hung band read never exits on its own.
+PARTITION_TIMEOUT=86400            # Kill a partition that is still alive after 24 hours. A hung band read never exits on its own.
 
 #######################################
 # Internal Variables (Be Careful to Modify)

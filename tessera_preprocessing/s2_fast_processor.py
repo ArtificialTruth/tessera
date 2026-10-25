@@ -1250,38 +1250,10 @@ def main():
         with performance_report(filename=report_path):
             # Process each day's data
             results = []
-            for i, (d, its) in enumerate(groups.items()):
+            for d, its in groups.items():
                 # Perform garbage collection
                 gc.collect()
-                
-                # Try to restart or recreate client before processing each new date
-                if i > 0:  # Skip first date as client was just created
-                    try:
-                        logging.info(f"[{a.partition_id}] Attempting to restart Dask client, setting timeout to 240 seconds, not waiting for workers...")
-                        # Set longer timeout and no wait for workers option
-                        dask_client.restart(timeout=240, wait_for_workers=False)
-                    except (TimeoutError, Exception) as e:
-                        logging.warning(f"[{a.partition_id}] Dask client restart failed: {e}, trying to recreate client...")
-                        try:
-                            # Close existing client
-                            try:
-                                dask_client.close(timeout=30)
-                            except:
-                                pass
-                            
-                            # Force memory cleanup
-                            gc.collect()
-                            
-                            # Brief pause to let system release resources
-                            time.sleep(5)
-                            
-                            # Recreate client
-                            dask_client = make_client(a.dask_workers, a.worker_memory, a.partition_id)
-                            logging.info(f"[{a.partition_id}] Dask client recreated successfully")
-                        except Exception as recreate_error:
-                            logging.error(f"[{a.partition_id}] Cannot recreate Dask client: {recreate_error}")
-                            # Continue processing, let function run normally even if performance may be reduced
-                
+
                 # Process current day data
                 try:
                     success = process_day(
