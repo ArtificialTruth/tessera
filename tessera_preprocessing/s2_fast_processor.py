@@ -12,7 +12,6 @@ import os, sys, argparse, logging, datetime, time, warnings, signal
 from pathlib import Path
 import multiprocessing
 from contextlib import contextmanager
-import concurrent.futures
 import uuid
 import tempfile
 import shutil
@@ -103,8 +102,8 @@ SCL_MAX_ATTEMPTS = 2        # SCL processing maximum attempts
 MAX_RETRIES = 5
 RETRY_BACKOFF_FACTOR = 1.5  # Exponential backoff factor
 
-# Parallel processing configuration
-DEFAULT_MAX_WORKERS = 2     # Default number of threads for processing items, avoid too many concurrent requests
+# Bands are read one at a time. Two float64 cubes of an 8-scene day
+# exceed the single 8GB Dask worker and the worker is killed.
 
 # ─── Timeout Control ──────────────────────────────────────────────────────────────────
 class TimeoutException(Exception):
@@ -237,6 +236,37 @@ def make_client(req_workers:int, req_mem:int, partition_id: str):
     cli = Client(cluster, asynchronous=False)
     logging.info(f"[{partition_id}] Dask dashboard → {cli.dashboard_link}")
     return cli
+
+# Set by main() so a failed band can replace a dead worker.
+_DASK_SPEC = None  # (workers, memory_gb, partition_id)
+
+def restart_dask_client():
+    """Close the current client and start a new one.
+
+    A worker killed for memory stays dead, and the next band's read
+    waits on it forever. The band timeout cannot interrupt that wait
+    once the client is gone.
+    """
+    spec = _DASK_SPEC
+    if spec is None:
+        return None
+    try:
+        current = Client.current()
+    except Exception:
+        current = None
+    if current is not None:
+        try:
+            current.close(timeout=30)
+        except Exception:
+            pass
+    time.sleep(5)
+    try:
+        client = make_client(*spec)
+        logging.info(f"[{spec[2]}] Dask client recreated")
+        return client
+    except Exception as e:
+        logging.warning(f"[{spec[2]}] Failed to recreate Dask client: {e}")
+        return None
 
 # ─── ROI & Mask ────────────────────────────────────────────────────────────────
 def load_roi(tiff: Path, partition_id: str, out_resolution_m: float):
@@ -859,25 +889,24 @@ def process_band(items, band_name, date_key, tpl, bbox_proj, mask_np, tile_selec
                 return True
                 
         except TimeoutException as e:
+            restart_dask_client()
             if attempt < retries:
                 retry_delay = min(30, (attempt + 1) * 2)  # Retry delay, max 30 seconds
                 logging.warning(f"[{partition_id}]     Band {band_name} processing timeout, retrying after {retry_delay}s ({attempt+1}/{retries})")
                 time.sleep(retry_delay)
             else:
                 logging.error(f"[{partition_id}]     ✗ Band {band_name} processing timeout: {e}")
-                return False
                 
         except Exception as e:
+            restart_dask_client()
             if attempt < retries:
                 retry_delay = min(30, (attempt + 1) * 2)  # Retry delay, max 30 seconds
                 logging.warning(f"[{partition_id}]     Band {band_name} processing error: {e}, retrying after {retry_delay}s ({attempt+1}/{retries})")
                 time.sleep(retry_delay)
             else:
                 logging.error(f"[{partition_id}]     ✗ Band {band_name} processing failed: {e}")
-                return False
 
-        # All retries failed
-        return False
+    return False
 
 # ─── Process SCL Assessment and Band Generation ───────────────────────────────────────────────────────────
 def process_scl_assessment_and_generation(items, date_key, tpl, bbox_proj, mask_np, res, chunksize,
@@ -1109,55 +1138,40 @@ def process_day(date_key:str, items, tpl, bbox_proj, mask_np,
             logging.debug(f"[{partition_id}]   Temporary directory: {day_temp_dir}")
             
             try:
-                # Use thread pool to process bands in parallel (excluding SCL)
+                # One band at a time, on this thread. Two bands at once build two
+                # float64 cubes and kill the single Dask worker. This thread is
+                # also the only place the band timeout alarm is delivered.
                 scl_key = "scl" if BAND_MAPPING is AWS_BAND_MAPPING else "SCL"
                 other_bands = [band for band in S2_BANDS if band != scl_key]
-                max_workers = min(DEFAULT_MAX_WORKERS, os.cpu_count())
-                logging.info(f"[{partition_id}]   Using {max_workers} threads to process {len(other_bands)} bands in parallel (excluding SCL)")
-                
-                with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-                    # Submit all tasks
-                    futures = {}
-                    
-                    for band_name in other_bands:
-                        out_name = BAND_MAPPING[band_name]
-                        out_path = out_root / out_name / f"{date_key}_mosaic.tiff"
-                        
-                        # If file already exists and is valid, skip
-                        if not overwrite and out_path.exists() and validate_tiff(out_path, (tpl["height"], tpl["width"]), tpl["crs"], tpl["transform"]):
-                            logging.info(f"[{partition_id}]     Band {band_name} valid file already exists, skipping")
-                            continue
-                        
-                        # Create temporary output path
-                        temp_path = Path(day_temp_dir) / f"{band_name}_{date_key}.tiff"
-                        
-                        # Submit task
-                        future = executor.submit(
-                            process_band, 
+                logging.info(f"[{partition_id}]   Processing {len(other_bands)} bands one at a time (excluding SCL)")
+
+                success_count = 1 if scl_success else 0
+                for band_name in other_bands:
+                    out_name = BAND_MAPPING[band_name]
+                    out_path = out_root / out_name / f"{date_key}_mosaic.tiff"
+
+                    # If file already exists and is valid, skip
+                    if not overwrite and out_path.exists() and validate_tiff(out_path, (tpl["height"], tpl["width"]), tpl["crs"], tpl["transform"]):
+                        logging.info(f"[{partition_id}]     Band {band_name} valid file already exists, skipping")
+                        success_count += 1
+                        continue
+
+                    temp_path = Path(day_temp_dir) / f"{band_name}_{date_key}.tiff"
+                    try:
+                        success = process_band(
                             items, band_name, date_key, tpl, bbox_proj, mask_np, tile_selection,
                             res, chunksize, temp_path, partition_id
                         )
-                        futures[future] = (band_name, out_path, temp_path)
-                    
-                    # Process results
-                    success_count = 0
-                    for future in concurrent.futures.as_completed(futures):
-                        band_name, out_path, temp_path = futures[future]
-                        try:
-                            success = future.result()
-                            if success:
-                                # Check if temporary file is valid
-                                if temp_path.exists() and validate_tiff(temp_path, (tpl["height"], tpl["width"]), tpl["crs"], tpl["transform"]):
-                                    # Move temporary file to final location
-                                    shutil.copy2(temp_path, out_path)
-                                    success_count += 1
-                                    logging.info(f"[{partition_id}]     ✓ {band_name} processing complete")
-                                else:
-                                    logging.error(f"[{partition_id}]     ✗ {band_name} temporary file invalid or does not exist")
-                            else:
-                                logging.warning(f"[{partition_id}]     ✗ {band_name} processing failed")
-                        except Exception as e:
-                            logging.error(f"[{partition_id}]     ✗ {band_name} processing exception: {e}")
+                    except Exception as e:
+                        logging.error(f"[{partition_id}]     ✗ {band_name} processing exception: {e}")
+                        success = False
+
+                    if success and temp_path.exists() and validate_tiff(temp_path, (tpl["height"], tpl["width"]), tpl["crs"], tpl["transform"]):
+                        shutil.copy2(temp_path, out_path)
+                        success_count += 1
+                        logging.info(f"[{partition_id}]     ✓ {band_name} processing complete")
+                    else:
+                        logging.warning(f"[{partition_id}]     ✗ {band_name} processing failed")
             finally:
                 # Clean up daily temporary directory
                 try:
@@ -1167,22 +1181,19 @@ def process_day(date_key:str, items, tpl, bbox_proj, mask_np,
                     logging.warning(f"[{partition_id}]   Failed to clean temporary directory: {e}")
             
             # Log processing results
-            total_other_bands = len(other_bands)
             total_bands = len(S2_BANDS)  # Including SCL
             proc_time = time.time() - t0
             
-            # Calculate total success: SCL success (1) + other bands success count
-            total_success = (1 if scl_success else 0) + success_count
+            # Skipped bands are included in success_count. A day is done only
+            # when every band file exists, so the shell cannot mark the
+            # window complete while a band is still missing.
+            total_success = success_count
             
             if total_success == total_bands:
                 logging.info(f"[{partition_id}] ← {date_key} all bands processed successfully ({total_success}/{total_bands}), time {proc_time:.1f}s")
                 return True
-            elif total_success > 0:
-                logging.warning(f"[{partition_id}] ← {date_key} partial bands processed successfully ({total_success}/{total_bands}), time {proc_time:.1f}s")
-                return True  # Partial success is also success
-            else:
-                logging.error(f"[{partition_id}] ← {date_key} all bands processing failed, time {proc_time:.1f}s")
-                return False
+            logging.error(f"[{partition_id}] ← {date_key} incomplete ({total_success}/{total_bands}), time {proc_time:.1f}s")
+            return False
                 
     except TimeoutException as e:
         proc_time = time.time() - t0
@@ -1244,6 +1255,8 @@ def main():
 
     try:
         # Create initial client
+        global _DASK_SPEC
+        _DASK_SPEC = (a.dask_workers, a.worker_memory, a.partition_id)
         dask_client = make_client(a.dask_workers, a.worker_memory, a.partition_id)
         
         report_path = out_dir / f"dask-report-{a.partition_id}.html"
